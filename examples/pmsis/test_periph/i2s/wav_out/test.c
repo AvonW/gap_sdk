@@ -22,11 +22,21 @@
 #include "wav_out.h"
 #include <bsp/bsp.h>
 
-#define NB_ELEM (8192*8 - 4)
+#define NB_ELEM (8192*8*3)
+//#define NB_ELEM (1024 * 16 * 16)
 #define BUFF_SIZE (NB_ELEM*2)
 
-static uint8_t buff[2][BUFF_SIZE];
+static uint8_t pingpong_buffers[2][1024 * 16] = {0};
+static uint8_t buff[BUFF_SIZE];
 static struct pi_device i2s;
+
+static volatile uint8_t done = 0;
+
+static void __pi_i2s_end_of_rx(void *arg)
+{
+    printf("I2S transfer completed !\n");
+    done = 1;
+}
 
 static int test_entry()
 {
@@ -43,9 +53,15 @@ static int test_entry()
 
     // Configure first interface for PDM 44100KHz DDR
     // Also gives the 2 buffers for double-buffering the sampling
+    #if 0
     i2s_conf.pingpong_buffers[0] = buff[0];
     i2s_conf.pingpong_buffers[1] = buff[1];
     i2s_conf.block_size = BUFF_SIZE;
+    #else
+    i2s_conf.pingpong_buffers[0] = pingpong_buffers[0];
+    i2s_conf.pingpong_buffers[1] = pingpong_buffers[1];
+    i2s_conf.block_size = 1024 * 16;
+    #endif
     i2s_conf.frame_clk_freq = 44100;
     //i2s_conf.frame_clk_freq = 48000;
     i2s_conf.itf = 0;
@@ -70,15 +86,28 @@ static int test_entry()
     // Capture a few samples
     printf("Capturing data...\n");
     pi_time_wait_us(1000);
+    #if 0
     for (int i=0; i<3; i++)
     {
         // Once it returns, chunk will point to the next available buffer
         // containing samples.
         pi_i2s_read(&i2s, (void **)&chunk, &size);
     }
+    #else
+    pi_task_t task = {0};
+    pi_task_callback(&task, __pi_i2s_end_of_rx, NULL);
+    //printf("Capturing\n");
+    pi_i2s_read_async2(&i2s, buff, BUFF_SIZE, &task);
+    while (!done)
+    {
+        pi_yield();
+    }
+    chunk = (int16_t *) &buff[0];
+    #endif  /* 0 */
 
     // Now stop sampling
     pi_i2s_ioctl(&i2s, PI_I2S_IOCTL_STOP, NULL);
+    printf("Close i2s\n");
 
     // Close the driver
     pi_i2s_close(&i2s);
@@ -88,12 +117,12 @@ static int test_entry()
     printf("Interface %d / channel 0\n", i2s_conf.itf);
     for (int i=0; i<16; i++)
     {
-      printf("  Sample %d: %d\n", i, chunk[i*2]);
+      printf("  Sample %x: %d\n", i, chunk[i*2]);
     }
     printf("Interface %d / channel 1\n", i2s_conf.itf);
     for (int i=0; i<16; i++)
     {
-      printf("  Sample %d: %d\n", i, chunk[i*2+1]);
+      printf("  Sample %x: %d\n", i, chunk[i*2+1]);
     }
 
     dump_wav("out_file.wav", i2s_conf.word_size, i2s_conf.frame_clk_freq,

@@ -98,6 +98,14 @@ int pi_i2s_read_async(struct pi_device *device, pi_task_t *task)
     return 0;
 }
 
+int pi_i2s_read_async2(struct pi_device *device, void *buffer, uint32_t size,
+                       pi_task_t *task)
+{
+    struct i2s_driver_fifo_s *fifo = (struct i2s_driver_fifo_s *) device->data;
+    __pi_i2s_read_async2(fifo->i2s_id, buffer, size, task);
+    return 0;
+}
+
 int pi_i2s_read_status(pi_task_t *task, void **mem_block, size_t *size)
 {
     return __pi_i2s_read_status(task, mem_block, size);

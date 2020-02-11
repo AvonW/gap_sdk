@@ -80,6 +80,11 @@ int32_t __pi_i2s_read(uint8_t i2s_id, void **mem_block, size_t *size);
 
 int32_t __pi_i2s_read_async(uint8_t i2s_id, pi_task_t *task);
 
+int32_t __pi_i2s_read_async2(uint8_t i2s_id, void *buffer, uint32_t size,
+                             pi_task_t *task);
+
+int32_t __pi_i2s_read_copy(pi_task_t *task, struct i2s_driver_fifo_s *fifo);
+
 int32_t __pi_i2s_read_status(pi_task_t *task, void **mem_block, size_t *size);
 
 int32_t __pi_i2s_write(uint8_t i2s_id, void *mem_block, size_t size);

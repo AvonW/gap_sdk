@@ -89,8 +89,17 @@ static void __pi_i2s_handler(void *arg)
     pi_task_t *task = fifo->fifo_head;
     if (task != NULL)
     {
-        fifo->fifo_head = fifo->fifo_head->next;
-        __pi_i2s_handle_end_of_task(task);
+        /* Not one shot, fill buffer entirely. */
+        if (!task->data[4])
+        {
+            __pi_i2s_read_copy(task, fifo);
+        }
+        /* One shot, fill buffer once with block_size defined. */
+        else
+        {
+            fifo->fifo_head = fifo->fifo_head->next;
+            __pi_i2s_handle_end_of_task(task);
+        }
     }
     else
     {
@@ -183,6 +192,7 @@ void __pi_i2s_conf_init(struct pi_i2s_conf *conf)
     conf->pingpong_buffers[1] = NULL;
     conf->pdm_decimation = 64;
     conf->pdm_shift = -1;
+    conf->pdm_filter_ena = 1;
 }
 
 int32_t __pi_i2s_open(struct pi_i2s_conf *conf)
@@ -240,6 +250,7 @@ int32_t __pi_i2s_open(struct pi_i2s_conf *conf)
     udma_init_device(UDMA_I2S_ID(device_id));
 
     uint8_t pdm = (conf->format & PI_I2S_FMT_DATA_FORMAT_MASK) == PI_I2S_FMT_DATA_FORMAT_PDM;
+    uint8_t pdm_filter_ena = conf->pdm_filter_ena;
     uint8_t shift = 0;
     uint16_t decimation = 0;
     uint8_t lsb = 0;
@@ -274,14 +285,14 @@ int32_t __pi_i2s_open(struct pi_i2s_conf *conf)
         /* Filter setup. */
         hal_i2s_filt_ch1_set(device_id, decimation, shift);
         /* Channel mode setup. */
-        hal_i2s_chmode_ch1_set(device_id, lsb, pdm, pdm, ddr, clk);
+        hal_i2s_chmode_ch1_set(device_id, lsb, pdm_filter_ena, pdm, ddr, clk);
     }
     else
     {
         /* Filter setup. */
         hal_i2s_filt_ch0_set(device_id, decimation, shift);
         /* Channel mode setup. */
-        hal_i2s_chmode_ch0_set(device_id, lsb, pdm, pdm, ddr, clk);
+        hal_i2s_chmode_ch0_set(device_id, lsb, pdm_filter_ena, pdm, ddr, clk);
     }
 
     restore_irq(irq);
@@ -343,9 +354,11 @@ int32_t __pi_i2s_read_async(uint8_t i2s_id, pi_task_t *task)
 {
     uint32_t irq = disable_irq();
     struct i2s_driver_fifo_s *fifo = __global_i2s_driver_fifo[i2s_id];
+    /* Fill rest of arguments for i2s driver. */
     task->data[0] = 0;
     task->data[1] = (uint32_t) fifo->pingpong_buffers[fifo->cur_read_buffer];
     task->data[2] = fifo->block_size;
+    task->data[4] = 1;
     task->next = NULL;
     fifo->cur_read_buffer ^= 1;
 
@@ -367,6 +380,53 @@ int32_t __pi_i2s_read_async(uint8_t i2s_id, pi_task_t *task)
         fifo->fifo_tail = task;
     }
     restore_irq(irq);
+    return 0;
+}
+
+int32_t __pi_i2s_read_async2(uint8_t i2s_id, void *buffer, uint32_t size,
+                             pi_task_t *task)
+{
+    uint32_t irq = disable_irq();
+    struct i2s_driver_fifo_s *fifo = __global_i2s_driver_fifo[i2s_id];
+    /* Fill rest of arguments for i2s driver. */
+    task->data[2] = (uint32_t) buffer;
+    task->data[3] = size;
+    task->data[4] = 0;
+    task->next = NULL;
+    fifo->cur_read_buffer ^= 1;
+
+    if (fifo->fifo_head != NULL)
+    {
+        fifo->fifo_tail->next = task;
+    }
+    else
+    {
+        fifo->fifo_head = task;
+    }
+    fifo->fifo_tail = task;
+
+    restore_irq(irq);
+    return 0;
+}
+
+/* May be process through a CB to push in event kernel? */
+int32_t __pi_i2s_read_copy(pi_task_t *task, struct i2s_driver_fifo_s *fifo)
+{
+    uint8_t *buffer = (uint8_t *) task->data[2];
+    uint32_t size = task->data[3];
+    if (size > 0)
+    {
+        task->data[2] += fifo->block_size;
+        task->data[3] -= fifo->block_size;
+        memcpy((void *) buffer,
+               (const void *) fifo->pingpong_buffers[fifo->cur_buffer],
+               fifo->block_size);
+    }
+    if (task->data[3] <= 0)
+    {
+        fifo->fifo_head = fifo->fifo_head->next;
+        __pi_i2s_handle_end_of_task(task);
+    }
     return 0;
 }
 
